@@ -169,46 +169,69 @@ def calculate_signals(df: pd.DataFrame, config: PairConfig) -> pd.DataFrame:
 
 def fetch_htf_data(config: PairConfig) -> Optional[pd.DataFrame]:
     """
-    Downloads OHLCV data using a daemon thread with a hard 25-second timeout.
-    thread.join(timeout=25) ALWAYS returns after 25s — no subprocess needed,
-    works in every cloud environment including restricted containers.
-    The daemon thread may keep running in background (it’s daemon=True so it
-    dies when the process exits), but the caller is never blocked beyond 25s.
+    Fetches OHLCV data DIRECTLY from Yahoo Finance REST API using requests.get().
+    requests.get(timeout=20) has a GUARANTEED socket-level timeout.
+    No yfinance, no threading tricks, no subprocess.
     """
-    result_holder: list = [None]
+    try:
+        end_ts   = int(time.time())
+        start_ts = end_ts - (60 * 24 * 3600)   # 60 days back
 
-    def _download():
-        try:
-            period = "60d"
-            # Browser User-Agent — helps bypass Yahoo Finance cloud-IP detection
-            sess = requests.Session()
-            sess.headers.update({
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                ),
-                "Accept": "*/*",
-            })
-            df = yf.download(
-                config.yf_ticker, period=period,
-                interval=config.htf, progress=False,
-                auto_adjust=True, session=sess
-            )
-            if df is None or df.empty:
-                return
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.droplevel(1)
-            df = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
-            if len(df) >= config.range_len * 3 + config.smooth + 5:
-                result_holder[0] = df
-        except Exception:
-            pass
+        yf_to_yahoo    = {"1h": "60m", "30m": "30m", "15m": "15m"}
+        yahoo_interval = yf_to_yahoo.get(config.htf, "60m")
 
-    t = threading.Thread(target=_download, daemon=True)
-    t.start()
-    t.join(timeout=25)   # Always returns after 25s — hang safe!
-    return result_holder[0]
+        url = f"https://query2.finance.yahoo.com/v8/finance/chart/{config.yf_ticker}"
+        params = {
+            "period1":  start_ts,
+            "period2":  end_ts,
+            "interval": yahoo_interval,
+            "events":   "history",
+        }
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "Accept":          "application/json",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+
+        resp = requests.get(url, params=params, headers=headers, timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+
+        result = data.get("chart", {}).get("result")
+        if not result:
+            return None
+
+        chart      = result[0]
+        timestamps = chart.get("timestamp", [])
+        if not timestamps:
+            return None
+
+        quote = chart["indicators"]["quote"][0]
+        df = pd.DataFrame({
+            "Open":   quote.get("open",   [None] * len(timestamps)),
+            "High":   quote.get("high",   [None] * len(timestamps)),
+            "Low":    quote.get("low",    [None] * len(timestamps)),
+            "Close":  quote.get("close",  [None] * len(timestamps)),
+            "Volume": quote.get("volume", [0]    * len(timestamps)),
+        }, index=pd.to_datetime(timestamps, unit="s", utc=True))
+
+        df = df.dropna(subset=["Open", "High", "Low", "Close"])
+        df = df.astype({"Open": float, "High": float,
+                        "Low": float, "Close": float, "Volume": float})
+
+        if len(df) < config.range_len * 3 + config.smooth + 5:
+            return None
+        return df
+
+    except requests.exceptions.Timeout:
+        return None
+    except Exception:
+        return None
+
 
 
 def send_alert(topic: str, title: str, body: str,
