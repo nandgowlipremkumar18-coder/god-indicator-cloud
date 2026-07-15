@@ -15,6 +15,7 @@ import pandas as pd
 import yfinance as yf
 import requests
 import threading
+import socket
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import json
@@ -23,6 +24,24 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Optional, Callable, Dict, List
 from enum import Enum
+
+# ── Cloud Fix: global socket timeout kills hung DNS/TCP connections ───────────
+socket.setdefaulttimeout(25)
+
+# ── Cloud Fix: shared session with browser headers ────────────────────────────
+# Yahoo Finance blocks datacenter IPs. A browser User-Agent bypasses this.
+_YF_SESSION = requests.Session()
+_YF_SESSION.headers.update({
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept":          "*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate",
+    "Connection":      "keep-alive",
+})
 
 
 # ─── PAIR CONFIG ──────────────────────────────────────────────────────────────
@@ -168,13 +187,12 @@ def fetch_htf_data(config: PairConfig) -> Optional[pd.DataFrame]:
     try:
         period_map = {"15m": "60d", "30m": "60d", "1h": "60d"}
         period = period_map.get(config.htf, "60d")
-        # Use a session with a 20s timeout — critical on cloud to avoid hanging
-        session = requests.Session()
-        session.request = lambda method, url, **kw: requests.Session.request(
-            session, method, url, timeout=kw.pop("timeout", 20), **kw)
-        df = yf.download(config.yf_ticker, period=period,
-                         interval=config.htf, progress=False,
-                         auto_adjust=True, session=session)
+        # Use shared browser session — avoids Yahoo Finance cloud-IP blocking
+        df = yf.download(
+            config.yf_ticker, period=period,
+            interval=config.htf, progress=False,
+            auto_adjust=True, session=_YF_SESSION
+        )
         if df is None or df.empty:
             return None
         if isinstance(df.columns, pd.MultiIndex):
