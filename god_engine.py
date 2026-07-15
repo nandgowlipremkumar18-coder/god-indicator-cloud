@@ -15,9 +15,6 @@ import pandas as pd
 import yfinance as yf
 import requests
 import threading
-import subprocess
-import sys
-import json as _json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import json
@@ -27,8 +24,8 @@ from dataclasses import dataclass, field
 from typing import Optional, Callable, Dict, List
 from enum import Enum
 
-# Path to the subprocess worker script
-_FETCH_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fetch_pair.py")
+# Path used only for local standalone testing (not used in cloud)
+_MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 # ─── PAIR CONFIG ──────────────────────────────────────────────────────────────
@@ -172,37 +169,46 @@ def calculate_signals(df: pd.DataFrame, config: PairConfig) -> pd.DataFrame:
 
 def fetch_htf_data(config: PairConfig) -> Optional[pd.DataFrame]:
     """
-    Runs fetch_pair.py as a subprocess with a 30-second OS-level kill timeout.
-    This is the ONLY reliable way to timeout yfinance on cloud servers.
-    subprocess.run(timeout=30) sends SIGKILL — no Python thread or SSL trick needed.
+    Downloads OHLCV data using a daemon thread with a hard 25-second timeout.
+    thread.join(timeout=25) ALWAYS returns after 25s — no subprocess needed,
+    works in every cloud environment including restricted containers.
+    The daemon thread may keep running in background (it’s daemon=True so it
+    dies when the process exits), but the caller is never blocked beyond 25s.
     """
-    try:
-        result = subprocess.run(
-            [sys.executable, _FETCH_SCRIPT, config.yf_ticker, config.htf],
-            capture_output=True, text=True, timeout=30
-        )
-        if result.returncode != 0 or not result.stdout.strip():
-            return None
+    result_holder: list = [None]
 
-        data = _json.loads(result.stdout.strip())
-        if "error" in data or not data.get("ok"):
-            return None
+    def _download():
+        try:
+            period = "60d"
+            # Browser User-Agent — helps bypass Yahoo Finance cloud-IP detection
+            sess = requests.Session()
+            sess.headers.update({
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Accept": "*/*",
+            })
+            df = yf.download(
+                config.yf_ticker, period=period,
+                interval=config.htf, progress=False,
+                auto_adjust=True, session=sess
+            )
+            if df is None or df.empty:
+                return
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.droplevel(1)
+            df = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
+            if len(df) >= config.range_len * 3 + config.smooth + 5:
+                result_holder[0] = df
+        except Exception:
+            pass
 
-        records = data["data"]
-        df = pd.DataFrame(records)
-        df["t"] = pd.to_datetime(df["t"])
-        df = df.set_index("t")
-        df.columns = ["Open", "High", "Low", "Close", "Volume"]
-        df = df.astype(float)
-
-        if len(df) < config.range_len * 3 + config.smooth + 5:
-            return None
-        return df
-
-    except subprocess.TimeoutExpired:
-        return None   # OS killed the subprocess at 30s — clean exit
-    except Exception:
-        return None
+    t = threading.Thread(target=_download, daemon=True)
+    t.start()
+    t.join(timeout=25)   # Always returns after 25s — hang safe!
+    return result_holder[0]
 
 
 def send_alert(topic: str, title: str, body: str,
@@ -345,14 +351,15 @@ class GodWatcherEngine:
         self._scan_running = True
         enabled = [n for n, s in self.statuses.items() if s.is_enabled]
         self._log(f"Scanning {len(enabled)}/{len(PAIR_CONFIGS)} pairs...", "dim")
-        # max_workers=4 — parallel downloads on cloud (much faster)
-        # shutdown(wait=False) — never hang waiting for stuck downloads!
-        pool = ThreadPoolExecutor(max_workers=4)
+        # max_workers=2: parallel downloads, fewer background threads
+        # as_completed timeout=120: full scan budget (25s/pair × 7 batches of 2)
+        # shutdown(wait=False): never hang waiting for stuck threads
+        pool = ThreadPoolExecutor(max_workers=2)
         try:
             futures = {pool.submit(self._check_pair, n, PAIR_CONFIGS[n]): n
                        for n in enabled}
             try:
-                for fut in as_completed(futures, timeout=90):
+                for fut in as_completed(futures, timeout=120):
                     name = futures[fut]
                     try:
                         fut.result()
@@ -361,7 +368,7 @@ class GodWatcherEngine:
             except TimeoutError:
                 self._log("Scan timed out — some pairs skipped", "orange")
         finally:
-            pool.shutdown(wait=False, cancel_futures=True)  # never hang!
+            pool.shutdown(wait=False, cancel_futures=True)
             self._scan_running = False
         self._notify_ui()
         self._log(f"Scan complete. Next scan in {self.check_interval // 60}m", "dim")
