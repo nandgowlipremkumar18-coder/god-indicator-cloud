@@ -112,6 +112,39 @@ def api_pair_toggle(name):
     get_engine().set_pair_enabled(name, enabled)
     return jsonify({"ok": True})
 
+@app.route("/test-fetch")
+def test_fetch():
+    """Diagnostic: test one yfinance download and return result + timing."""
+    import time
+    from god_engine import fetch_htf_data, PAIR_CONFIGS
+    start = time.time()
+    try:
+        df = fetch_htf_data(PAIR_CONFIGS["EURUSD"])
+        elapsed = round(time.time() - start, 2)
+        if df is not None and not df.empty:
+            return jsonify({
+                "status":      "SUCCESS",
+                "elapsed_sec": elapsed,
+                "rows":        len(df),
+                "last_close":  round(float(df["Close"].iloc[-1]), 5),
+                "last_time":   str(df.index[-1]),
+                "message":     "yfinance is working on this server!"
+            })
+        else:
+            return jsonify({
+                "status":      "EMPTY",
+                "elapsed_sec": elapsed,
+                "message":     "yfinance returned no data — Yahoo Finance may be blocking this IP"
+            })
+    except Exception as e:
+        elapsed = round(time.time() - start, 2)
+        return jsonify({
+            "status":      "ERROR",
+            "elapsed_sec": elapsed,
+            "error":       str(e),
+            "message":     "Exception during download"
+        })
+
 # ── Entry Point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
