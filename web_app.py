@@ -62,7 +62,7 @@ def api_status():
                 "htf":             s.htf,
                 "is_narrow":       s.is_narrow,
                 "signal":          s.signal.value if s.signal else None,
-                "stars":           s.stars,
+                "stars":           s.confluence_score,
                 "last_check_time": s.last_check_time,
                 "error":           s.error,
                 "is_enabled":      s.is_enabled,
