@@ -10,22 +10,23 @@ Phase 2 additions:
   - Smarter alert thresholds
 """
 
-import sys
-import subprocess
+import socket
 import numpy as np
 import pandas as pd
+import yfinance as yf
 import requests
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
-import json
 import os
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Optional, Callable, Dict, List
 from enum import Enum
 
-# Path used only for local standalone testing (not used in cloud)
+# Global socket timeout — guarantees NO network call hangs forever,
+# regardless of which thread makes it. Works on all OSes.
+socket.setdefaulttimeout(20)
+
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -170,54 +171,26 @@ def calculate_signals(df: pd.DataFrame, config: PairConfig) -> pd.DataFrame:
 
 def fetch_htf_data(config: PairConfig) -> Optional[pd.DataFrame]:
     """
-    Downloads OHLCV data by calling fetch_pair.py as a SUBPROCESS.
-
-    Why subprocess?
-    - threading.Thread.join(timeout=N) proved unreliable on Render's cloud
-    - subprocess.run(timeout=30) sends OS-level SIGKILL to the child process
-    - The kernel kills the process regardless of what the network is doing
-    - This is the ONLY 100% guaranteed timeout mechanism in Python
-
-    Performance: Python startup ~0.3s + network 0.1-30s per pair
-    Worst case: 13 pairs × 30s / 2 workers = ~3 min total scan
+    Downloads OHLCV data using yfinance — identical to the working ScreenWatcher
+    desktop version. socket.setdefaulttimeout(20) at module level guarantees
+    no network call can hang beyond 20 seconds from any thread.
     """
-    import subprocess, json
-
-    script = os.path.join(_MODULE_DIR, "fetch_pair.py")
-
     try:
-        proc = subprocess.run(
-            [sys.executable, script, config.yf_ticker, config.htf],
-            capture_output=True, text=True, timeout=30
+        period_map = {"15m": "60d", "30m": "60d", "1h": "60d"}
+        period = period_map.get(config.htf, "60d")
+        df = yf.download(
+            config.yf_ticker, period=period,
+            interval=config.htf, progress=False,
+            auto_adjust=True, threads=False
         )
-        if proc.returncode != 0 or not proc.stdout.strip():
+        if df is None or df.empty:
             return None
-
-        data = json.loads(proc.stdout.strip())
-        if "error" in data:
-            return None
-
-        records = data.get("data", [])
-        if not records:
-            return None
-
-        # Build DataFrame from JSON records
-        timestamps = [r["t"] for r in records]
-        df = pd.DataFrame({
-            "Open":   [r["o"] for r in records],
-            "High":   [r["h"] for r in records],
-            "Low":    [r["l"] for r in records],
-            "Close":  [r["c"] for r in records],
-            "Volume": [r["v"] for r in records],
-        }, index=pd.to_datetime(timestamps, unit="s", utc=True))
-
-        df = df.astype(float)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.droplevel(1)
+        df = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
         if len(df) < config.range_len * 3 + config.smooth + 5:
             return None
         return df
-
-    except subprocess.TimeoutExpired:
-        return None
     except Exception:
         return None
 
