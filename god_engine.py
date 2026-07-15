@@ -412,7 +412,8 @@ class GodWatcherEngine:
                     status.error = "No data from Yahoo Finance"
                 return
 
-            df = compute_signals(df, config)
+            df = calculate_signals(df, config)
+
             if len(df) < 2:
                 return
 
