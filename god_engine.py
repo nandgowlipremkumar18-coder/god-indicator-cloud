@@ -168,8 +168,13 @@ def fetch_htf_data(config: PairConfig) -> Optional[pd.DataFrame]:
     try:
         period_map = {"15m": "60d", "30m": "60d", "1h": "60d"}
         period = period_map.get(config.htf, "60d")
+        # Use a session with a 20s timeout — critical on cloud to avoid hanging
+        session = requests.Session()
+        session.request = lambda method, url, **kw: requests.Session.request(
+            session, method, url, timeout=kw.pop("timeout", 20), **kw)
         df = yf.download(config.yf_ticker, period=period,
-                         interval=config.htf, progress=False, auto_adjust=True)
+                         interval=config.htf, progress=False,
+                         auto_adjust=True, session=session)
         if df is None or df.empty:
             return None
         if isinstance(df.columns, pd.MultiIndex):
@@ -322,21 +327,23 @@ class GodWatcherEngine:
         self._scan_running = True
         enabled = [n for n, s in self.statuses.items() if s.is_enabled]
         self._log(f"Scanning {len(enabled)}/{len(PAIR_CONFIGS)} pairs...", "dim")
+        # max_workers=4 — parallel downloads on cloud (much faster)
+        # shutdown(wait=False) — never hang waiting for stuck downloads!
+        pool = ThreadPoolExecutor(max_workers=4)
         try:
-            # One pair at a time — UI stays smooth, no GIL freeze
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                futures = {pool.submit(self._check_pair, n, PAIR_CONFIGS[n]): n
-                           for n in enabled}
-                try:
-                    for fut in as_completed(futures, timeout=300):
-                        name = futures[fut]
-                        try:
-                            fut.result()
-                        except Exception as e:
-                            self._log(f"{name} error: {e}", "red")
-                except TimeoutError:
-                    self._log("Scan timed out — some pairs skipped", "orange")
+            futures = {pool.submit(self._check_pair, n, PAIR_CONFIGS[n]): n
+                       for n in enabled}
+            try:
+                for fut in as_completed(futures, timeout=90):
+                    name = futures[fut]
+                    try:
+                        fut.result()
+                    except Exception as e:
+                        self._log(f"{name} error: {e}", "red")
+            except TimeoutError:
+                self._log("Scan timed out — some pairs skipped", "orange")
         finally:
+            pool.shutdown(wait=False, cancel_futures=True)  # never hang!
             self._scan_running = False
         self._notify_ui()
         self._log(f"Scan complete. Next scan in {self.check_interval // 60}m", "dim")
