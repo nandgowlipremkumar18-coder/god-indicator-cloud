@@ -10,9 +10,10 @@ Phase 2 additions:
   - Smarter alert thresholds
 """
 
+import sys
+import subprocess
 import numpy as np
 import pandas as pd
-import yfinance as yf
 import requests
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -167,83 +168,58 @@ def calculate_signals(df: pd.DataFrame, config: PairConfig) -> pd.DataFrame:
     return df
 
 
-def _yahoo_fetch(config: PairConfig) -> Optional[pd.DataFrame]:
-    """Inner function: direct Yahoo Finance REST API call with per-packet timeout=20."""
+def fetch_htf_data(config: PairConfig) -> Optional[pd.DataFrame]:
+    """
+    Downloads OHLCV data by calling fetch_pair.py as a SUBPROCESS.
+
+    Why subprocess?
+    - threading.Thread.join(timeout=N) proved unreliable on Render's cloud
+    - subprocess.run(timeout=30) sends OS-level SIGKILL to the child process
+    - The kernel kills the process regardless of what the network is doing
+    - This is the ONLY 100% guaranteed timeout mechanism in Python
+
+    Performance: Python startup ~0.3s + network 0.1-30s per pair
+    Worst case: 13 pairs × 30s / 2 workers = ~3 min total scan
+    """
+    import subprocess, json
+
+    script = os.path.join(_MODULE_DIR, "fetch_pair.py")
+
     try:
-        end_ts   = int(time.time())
-        start_ts = end_ts - (60 * 24 * 3600)
-
-        yf_to_yahoo    = {"1h": "60m", "30m": "30m", "15m": "15m"}
-        yahoo_interval = yf_to_yahoo.get(config.htf, "60m")
-
-        url = f"https://query2.finance.yahoo.com/v8/finance/chart/{config.yf_ticker}"
-        params = {
-            "period1": start_ts, "period2": end_ts,
-            "interval": yahoo_interval, "events": "history",
-        }
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ),
-            "Accept": "application/json",
-        }
-
-        resp = requests.get(url, params=params, headers=headers, timeout=18)
-        resp.raise_for_status()
-        data = resp.json()
-
-        result = data.get("chart", {}).get("result")
-        if not result:
+        proc = subprocess.run(
+            [sys.executable, script, config.yf_ticker, config.htf],
+            capture_output=True, text=True, timeout=30
+        )
+        if proc.returncode != 0 or not proc.stdout.strip():
             return None
 
-        chart      = result[0]
-        timestamps = chart.get("timestamp", [])
-        if not timestamps:
+        data = json.loads(proc.stdout.strip())
+        if "error" in data:
             return None
 
-        quote = chart["indicators"]["quote"][0]
+        records = data.get("data", [])
+        if not records:
+            return None
+
+        # Build DataFrame from JSON records
+        timestamps = [r["t"] for r in records]
         df = pd.DataFrame({
-            "Open":   quote.get("open",   [None] * len(timestamps)),
-            "High":   quote.get("high",   [None] * len(timestamps)),
-            "Low":    quote.get("low",    [None] * len(timestamps)),
-            "Close":  quote.get("close",  [None] * len(timestamps)),
-            "Volume": quote.get("volume", [0]    * len(timestamps)),
+            "Open":   [r["o"] for r in records],
+            "High":   [r["h"] for r in records],
+            "Low":    [r["l"] for r in records],
+            "Close":  [r["c"] for r in records],
+            "Volume": [r["v"] for r in records],
         }, index=pd.to_datetime(timestamps, unit="s", utc=True))
 
-        df = df.dropna(subset=["Open", "High", "Low", "Close"])
         df = df.astype(float)
         if len(df) < config.range_len * 3 + config.smooth + 5:
             return None
         return df
+
+    except subprocess.TimeoutExpired:
+        return None
     except Exception:
         return None
-
-
-def fetch_htf_data(config: PairConfig) -> Optional[pd.DataFrame]:
-    """
-    Downloads OHLCV data with a GUARANTEED 22-second hard wall-clock timeout.
-
-    Problem: requests.get(timeout=N) only sets the per-packet socket timeout.
-    Yahoo Finance sometimes trickles data slowly to defeat timeouts, causing
-    indefinite hangs that no per-packet timeout can fix.
-
-    Solution: Run the HTTP call in a daemon thread and join(timeout=22).
-    threading.Thread.join(timeout=22) is GUARANTEED to return after 22 seconds
-    in CPython regardless of what the network is doing. The stuck thread keeps
-    running as a daemon (dies when the process exits) but the caller is NEVER
-    blocked for more than 22 seconds.
-    """
-    result_holder: list = [None]
-
-    def _worker():
-        result_holder[0] = _yahoo_fetch(config)
-
-    t = threading.Thread(target=_worker, daemon=True)
-    t.start()
-    t.join(timeout=22)        # HARD limit — ALWAYS returns after 22s
-    return result_holder[0]
 
 
 
