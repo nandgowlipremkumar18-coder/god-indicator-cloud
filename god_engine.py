@@ -167,25 +167,19 @@ def calculate_signals(df: pd.DataFrame, config: PairConfig) -> pd.DataFrame:
     return df
 
 
-def fetch_htf_data(config: PairConfig) -> Optional[pd.DataFrame]:
-    """
-    Fetches OHLCV data DIRECTLY from Yahoo Finance REST API using requests.get().
-    requests.get(timeout=20) has a GUARANTEED socket-level timeout.
-    No yfinance, no threading tricks, no subprocess.
-    """
+def _yahoo_fetch(config: PairConfig) -> Optional[pd.DataFrame]:
+    """Inner function: direct Yahoo Finance REST API call with per-packet timeout=20."""
     try:
         end_ts   = int(time.time())
-        start_ts = end_ts - (60 * 24 * 3600)   # 60 days back
+        start_ts = end_ts - (60 * 24 * 3600)
 
         yf_to_yahoo    = {"1h": "60m", "30m": "30m", "15m": "15m"}
         yahoo_interval = yf_to_yahoo.get(config.htf, "60m")
 
         url = f"https://query2.finance.yahoo.com/v8/finance/chart/{config.yf_ticker}"
         params = {
-            "period1":  start_ts,
-            "period2":  end_ts,
-            "interval": yahoo_interval,
-            "events":   "history",
+            "period1": start_ts, "period2": end_ts,
+            "interval": yahoo_interval, "events": "history",
         }
         headers = {
             "User-Agent": (
@@ -193,11 +187,10 @@ def fetch_htf_data(config: PairConfig) -> Optional[pd.DataFrame]:
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/120.0.0.0 Safari/537.36"
             ),
-            "Accept":          "application/json",
-            "Accept-Language": "en-US,en;q=0.9",
+            "Accept": "application/json",
         }
 
-        resp = requests.get(url, params=params, headers=headers, timeout=20)
+        resp = requests.get(url, params=params, headers=headers, timeout=18)
         resp.raise_for_status()
         data = resp.json()
 
@@ -220,17 +213,37 @@ def fetch_htf_data(config: PairConfig) -> Optional[pd.DataFrame]:
         }, index=pd.to_datetime(timestamps, unit="s", utc=True))
 
         df = df.dropna(subset=["Open", "High", "Low", "Close"])
-        df = df.astype({"Open": float, "High": float,
-                        "Low": float, "Close": float, "Volume": float})
-
+        df = df.astype(float)
         if len(df) < config.range_len * 3 + config.smooth + 5:
             return None
         return df
-
-    except requests.exceptions.Timeout:
-        return None
     except Exception:
         return None
+
+
+def fetch_htf_data(config: PairConfig) -> Optional[pd.DataFrame]:
+    """
+    Downloads OHLCV data with a GUARANTEED 22-second hard wall-clock timeout.
+
+    Problem: requests.get(timeout=N) only sets the per-packet socket timeout.
+    Yahoo Finance sometimes trickles data slowly to defeat timeouts, causing
+    indefinite hangs that no per-packet timeout can fix.
+
+    Solution: Run the HTTP call in a daemon thread and join(timeout=22).
+    threading.Thread.join(timeout=22) is GUARANTEED to return after 22 seconds
+    in CPython regardless of what the network is doing. The stuck thread keeps
+    running as a daemon (dies when the process exits) but the caller is NEVER
+    blocked for more than 22 seconds.
+    """
+    result_holder: list = [None]
+
+    def _worker():
+        result_holder[0] = _yahoo_fetch(config)
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    t.join(timeout=22)        # HARD limit — ALWAYS returns after 22s
+    return result_holder[0]
 
 
 
