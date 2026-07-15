@@ -15,7 +15,9 @@ import pandas as pd
 import yfinance as yf
 import requests
 import threading
-import socket
+import subprocess
+import sys
+import json as _json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import json
@@ -25,23 +27,8 @@ from dataclasses import dataclass, field
 from typing import Optional, Callable, Dict, List
 from enum import Enum
 
-# ── Cloud Fix: global socket timeout kills hung DNS/TCP connections ───────────
-socket.setdefaulttimeout(25)
-
-# ── Cloud Fix: shared session with browser headers ────────────────────────────
-# Yahoo Finance blocks datacenter IPs. A browser User-Agent bypasses this.
-_YF_SESSION = requests.Session()
-_YF_SESSION.headers.update({
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "Accept":          "*/*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate",
-    "Connection":      "keep-alive",
-})
+# Path to the subprocess worker script
+_FETCH_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fetch_pair.py")
 
 
 # ─── PAIR CONFIG ──────────────────────────────────────────────────────────────
@@ -184,23 +171,36 @@ def calculate_signals(df: pd.DataFrame, config: PairConfig) -> pd.DataFrame:
 
 
 def fetch_htf_data(config: PairConfig) -> Optional[pd.DataFrame]:
+    """
+    Runs fetch_pair.py as a subprocess with a 30-second OS-level kill timeout.
+    This is the ONLY reliable way to timeout yfinance on cloud servers.
+    subprocess.run(timeout=30) sends SIGKILL — no Python thread or SSL trick needed.
+    """
     try:
-        period_map = {"15m": "60d", "30m": "60d", "1h": "60d"}
-        period = period_map.get(config.htf, "60d")
-        # Use shared browser session — avoids Yahoo Finance cloud-IP blocking
-        df = yf.download(
-            config.yf_ticker, period=period,
-            interval=config.htf, progress=False,
-            auto_adjust=True, session=_YF_SESSION
+        result = subprocess.run(
+            [sys.executable, _FETCH_SCRIPT, config.yf_ticker, config.htf],
+            capture_output=True, text=True, timeout=30
         )
-        if df is None or df.empty:
+        if result.returncode != 0 or not result.stdout.strip():
             return None
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.droplevel(1)
-        df = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
+
+        data = _json.loads(result.stdout.strip())
+        if "error" in data or not data.get("ok"):
+            return None
+
+        records = data["data"]
+        df = pd.DataFrame(records)
+        df["t"] = pd.to_datetime(df["t"])
+        df = df.set_index("t")
+        df.columns = ["Open", "High", "Low", "Close", "Volume"]
+        df = df.astype(float)
+
         if len(df) < config.range_len * 3 + config.smooth + 5:
             return None
         return df
+
+    except subprocess.TimeoutExpired:
+        return None   # OS killed the subprocess at 30s — clean exit
     except Exception:
         return None
 
