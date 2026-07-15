@@ -128,22 +128,86 @@ def test_fetch():
                 "rows":        len(df),
                 "last_close":  round(float(df["Close"].iloc[-1]), 5),
                 "last_time":   str(df.index[-1]),
-                "message":     "yfinance is working on this server!"
+                "message":     "Download working on this server!"
             })
         else:
             return jsonify({
                 "status":      "EMPTY",
                 "elapsed_sec": elapsed,
-                "message":     "yfinance returned no data — Yahoo Finance may be blocking this IP"
+                "message":     "Returned no data"
             })
     except Exception as e:
         elapsed = round(time.time() - start, 2)
-        return jsonify({
-            "status":      "ERROR",
-            "elapsed_sec": elapsed,
-            "error":       str(e),
-            "message":     "Exception during download"
-        })
+        return jsonify({"status": "ERROR", "elapsed_sec": elapsed, "error": str(e)})
+
+
+@app.route("/test-all")
+def test_all():
+    """
+    Diagnostic: test ALL 13 pairs one by one via subprocess.
+    Shows which pairs work, which fail, and how long each takes.
+    Runs sequentially — expect 30-390 seconds total.
+    Open this URL directly in browser to see results.
+    """
+    import time, subprocess, json as _json
+    from god_engine import PAIR_CONFIGS, _MODULE_DIR
+    import sys
+
+    script   = os.path.join(_MODULE_DIR, "fetch_pair.py")
+    results  = {}
+    total_t0 = time.time()
+
+    for name, cfg in PAIR_CONFIGS.items():
+        t0 = time.time()
+        try:
+            proc = subprocess.run(
+                [sys.executable, script, cfg.yf_ticker, cfg.htf],
+                capture_output=True, text=True, timeout=35
+            )
+            elapsed = round(time.time() - t0, 2)
+            if proc.returncode == 0 and proc.stdout.strip():
+                data = _json.loads(proc.stdout.strip())
+                if "ok" in data:
+                    results[name] = {
+                        "status": "OK", "rows": data["rows"],
+                        "ticker": cfg.yf_ticker, "elapsed_sec": elapsed
+                    }
+                else:
+                    results[name] = {
+                        "status": "FAIL", "error": data.get("error"),
+                        "ticker": cfg.yf_ticker, "elapsed_sec": elapsed
+                    }
+            else:
+                results[name] = {
+                    "status": "EMPTY", "returncode": proc.returncode,
+                    "stderr": proc.stderr[:200] if proc.stderr else None,
+                    "ticker": cfg.yf_ticker, "elapsed_sec": elapsed
+                }
+        except subprocess.TimeoutExpired:
+            results[name] = {
+                "status": "TIMEOUT (35s)", "ticker": cfg.yf_ticker,
+                "elapsed_sec": 35
+            }
+        except Exception as e:
+            results[name] = {
+                "status": "EXCEPTION", "error": str(e),
+                "ticker": cfg.yf_ticker, "elapsed_sec": round(time.time() - t0, 2)
+            }
+
+    total_elapsed = round(time.time() - total_t0, 2)
+    ok_count   = sum(1 for r in results.values() if r["status"] == "OK")
+    fail_count = len(results) - ok_count
+
+    return jsonify({
+        "summary": {
+            "total_pairs":   len(results),
+            "ok":            ok_count,
+            "failed":        fail_count,
+            "total_elapsed": total_elapsed
+        },
+        "pairs": results
+    })
+
 
 # ── Entry Point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
