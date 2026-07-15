@@ -365,29 +365,22 @@ class GodWatcherEngine:
         scan_start = time.time()
         enabled = [n for n, s in self.statuses.items() if s.is_enabled]
         self._log(f"Scanning {len(enabled)}/{len(PAIR_CONFIGS)} pairs...", "dim")
-        pool = ThreadPoolExecutor(max_workers=2)
         try:
-            futures = {pool.submit(self._check_pair, n, PAIR_CONFIGS[n]): n
-                       for n in enabled}
-            try:
-                for fut in as_completed(futures, timeout=120):
-                    name = futures[fut]
-                    try:
-                        fut.result()
-                    except Exception as e:
-                        self._log(f"{name} error: {e}", "red")
-                    # Hard wall-clock guard: abort if total scan > 3 minutes
-                    if time.time() - scan_start > 180:
-                        self._log("3-min wall-clock limit hit — aborting scan", "orange")
-                        break
-            except TimeoutError:
-                self._log("Scan timed out — some pairs skipped", "orange")
+            # Sequential — matches /test-all which proves subprocess works
+            # ThreadPoolExecutor caused fork-in-thread deadlocks on Render Linux
+            for name in enabled:
+                if not self.running:
+                    break
+                try:
+                    self._check_pair(name, PAIR_CONFIGS[name])
+                except Exception as e:
+                    self._log(f"{name} error: {e}", "red")
         finally:
-            pool.shutdown(wait=False, cancel_futures=True)
             self._scan_running = False
         self._notify_ui()
         total = time.time() - scan_start
         self._log(f"Scan complete in {total:.1f}s. Next scan in {self.check_interval // 60}m", "dim")
+
 
 
     def _check_pair(self, name: str, config: PairConfig):
