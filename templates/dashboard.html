@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>GOD INDICATOR v3.0 — Command Centre</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet"/>
+  <style>
+    :root {
+      --bg:        #0a0d12;
+      --surface:   #111520;
+      --card:      #141824;
+      --border:    #1e2535;
+      --accent:    #7c3aed;
+      --accent2:   #a855f7;
+      --gold:      #f59e0b;
+      --green:     #10b981;
+      --red:       #ef4444;
+      --orange:    #f97316;
+      --blue:      #3b82f6;
+      --dim:       #4b5563;
+      --fg:        #e2e8f0;
+      --fg2:       #94a3b8;
+    }
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      min-height: 100vh;
+    }
+
+    /* ── HEADER ── */
+    header {
+      background: linear-gradient(135deg, #0f0a1e 0%, #0a0d12 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky; top: 0; z-index: 100;
+      backdrop-filter: blur(12px);
+    }
+    .logo {
+      font-size: 22px; font-weight: 900; letter-spacing: 3px;
+      background: linear-gradient(135deg, #a855f7, #7c3aed, #6366f1);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    .subtitle { font-size: 11px; color: var(--dim); letter-spacing: 2px; margin-top: 2px; }
+    .header-right { display: flex; align-items: center; gap: 20px; }
+    .clock {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px; color: var(--gold); letter-spacing: 1px;
+    }
+    .engine-badge {
+      padding: 4px 12px; border-radius: 20px; font-size: 11px;
+      font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase;
+    }
+    .badge-running { background: rgba(16,185,129,.15); color: var(--green); border: 1px solid rgba(16,185,129,.3); }
+    .badge-stopped { background: rgba(239,68,68,.15); color: var(--red); border: 1px solid rgba(239,68,68,.3); }
+
+    /* ── STATS BAR ── */
+    .stats-bar {
+      display: flex; gap: 0;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 28px;
+    }
+    .stat {
+      padding: 14px 24px; border-right: 1px solid var(--border);
+      text-align: center; min-width: 120px;
+    }
+    .stat-label { font-size: 10px; color: var(--dim); letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 4px; }
+    .stat-val { font-family: 'JetBrains Mono', monospace; font-size: 18px; font-weight: 700; }
+
+    /* ── CONTROLS ── */
+    .controls {
+      display: flex; align-items: center; gap: 12px;
+      padding: 14px 28px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+    .btn {
+      padding: 8px 22px; border-radius: 6px; border: none;
+      font-size: 12px; font-weight: 700; letter-spacing: 1.5px;
+      cursor: pointer; transition: all .2s; text-transform: uppercase;
+    }
+    .btn-start  { background: var(--green); color: #000; }
+    .btn-stop   { background: var(--red); color: #fff; }
+    .btn-scan   { background: var(--blue); color: #fff; }
+    .btn-alert  { background: var(--accent); color: #fff; }
+    .btn:hover  { opacity: 0.85; transform: translateY(-1px); }
+    .btn:active { transform: translateY(0); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+    .controls-right { margin-left: auto; display: flex; align-items: center; gap: 16px; }
+    .ctrl-label { font-size: 11px; color: var(--dim); }
+    .ctrl-select {
+      background: var(--card); border: 1px solid var(--border);
+      color: var(--fg); padding: 5px 10px; border-radius: 5px; font-size: 12px;
+    }
+    .refresh-indicator {
+      font-size: 10px; color: var(--dim); letter-spacing: 1px;
+    }
+
+    /* ── PAIR GRID ── */
+    .grid-container { padding: 20px 28px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+      gap: 14px;
+    }
+    .pair-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px; padding: 14px 16px;
+      transition: border-color .3s, box-shadow .3s;
+      position: relative; overflow: hidden;
+    }
+    .pair-card:hover { border-color: var(--accent); box-shadow: 0 0 20px rgba(124,58,237,.1); }
+    .pair-card.signal-long  { border-color: rgba(16,185,129,.5); box-shadow: 0 0 25px rgba(16,185,129,.15); }
+    .pair-card.signal-short { border-color: rgba(239,68,68,.5);  box-shadow: 0 0 25px rgba(239,68,68,.15); }
+    .pair-card.consolidating { border-color: rgba(245,158,11,.4); }
+
+    .card-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    .pair-name { font-size: 14px; font-weight: 800; letter-spacing: 1px; }
+    .pair-htf {
+      font-size: 10px; padding: 2px 7px; border-radius: 4px;
+      background: var(--border); color: var(--dim); font-weight: 600;
+    }
+    .pair-price {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 22px; font-weight: 700; margin-bottom: 4px;
+    }
+    .pair-status {
+      font-size: 11px; font-weight: 600; letter-spacing: 1px; margin-bottom: 10px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .status-dot { width: 6px; height: 6px; border-radius: 50%; }
+    .dot-watch   { background: var(--dim); }
+    .dot-long    { background: var(--green); }
+    .dot-short   { background: var(--red); }
+    .dot-consol  { background: var(--gold); }
+
+    /* Stars */
+    .stars { font-size: 13px; margin-bottom: 8px; }
+
+    /* NR Bar */
+    .nr-bar-wrap { margin-top: 6px; }
+    .nr-label { font-size: 10px; color: var(--dim); margin-bottom: 4px; display: flex; justify-content: space-between; }
+    .nr-track { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+    .nr-fill  { height: 100%; border-radius: 2px; transition: width .8s ease; }
+    .fill-watch  { background: var(--dim); }
+    .fill-consol { background: var(--gold); }
+    .fill-long   { background: var(--green); }
+    .fill-short  { background: var(--red); }
+
+    .pair-error { font-size: 10px; color: var(--red); margin-top: 4px; }
+    .pair-time  { font-size: 9px; color: var(--dim); margin-top: 6px; text-align: right; }
+
+    /* Enabled toggle */
+    .toggle-wrap { position: absolute; top: 12px; right: 12px; }
+    .toggle {
+      appearance: none; width: 32px; height: 16px; border-radius: 8px;
+      background: var(--border); cursor: pointer; transition: background .2s;
+      position: relative;
+    }
+    .toggle::after {
+      content: ''; position: absolute; width: 12px; height: 12px;
+      background: #fff; border-radius: 50%; top: 2px; left: 2px; transition: left .2s;
+    }
+    .toggle:checked { background: var(--green); }
+    .toggle:checked::after { left: 18px; }
+
+    /* ── LOG ── */
+    .log-section { padding: 0 28px 28px; }
+    .log-title { font-size: 11px; letter-spacing: 2px; color: var(--dim); text-transform: uppercase; margin-bottom: 10px; }
+    .log-box {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+      padding: 14px; height: 160px; overflow-y: auto;
+      font-family: 'JetBrains Mono', monospace; font-size: 11px; line-height: 1.8;
+    }
+    .log-box::-webkit-scrollbar { width: 4px; }
+    .log-box::-webkit-scrollbar-track { background: var(--surface); }
+    .log-box::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+    .log-green  { color: var(--green); }
+    .log-red    { color: var(--red); }
+    .log-orange { color: var(--orange); }
+    .log-gold   { color: var(--gold); }
+    .log-dim    { color: var(--dim); }
+    .log-blue   { color: var(--blue); }
+
+    /* ── SESSIONS ── */
+    .sessions { display: flex; gap: 8px; align-items: center; }
+    .sess-pill {
+      padding: 3px 10px; border-radius: 12px; font-size: 10px;
+      font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+    }
+    .sess-active   { background: rgba(16,185,129,.2); color: var(--green); border: 1px solid rgba(16,185,129,.4); }
+    .sess-inactive { background: var(--border); color: var(--dim); }
+
+    /* ── TOAST ── */
+    .toast {
+      position: fixed; bottom: 28px; right: 28px; z-index: 999;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; padding: 12px 20px; font-size: 13px;
+      box-shadow: 0 8px 32px rgba(0,0,0,.4);
+      transform: translateY(80px); opacity: 0;
+      transition: all .3s ease;
+    }
+    .toast.show { transform: translateY(0); opacity: 1; }
+
+    /* ── SCAN OVERLAY ── */
+    .scanning-bar {
+      height: 2px; background: linear-gradient(90deg, var(--accent), var(--accent2), var(--accent));
+      background-size: 200% 100%; animation: shimmer 1.5s infinite;
+      display: none;
+    }
+    @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+    .scanning-bar.active { display: block; }
+  </style>
+</head>
+<body>
+
+<!-- SCANNING BAR -->
+<div class="scanning-bar" id="scanBar"></div>
+
+<!-- HEADER -->
+<header>
+  <div>
+    <div class="logo">⚡ GOD INDICATOR</div>
+    <div class="subtitle">Phase 3 · Confluence Scoring · Cooldown · Cloud Edition</div>
+  </div>
+  <div class="header-right">
+    <div class="sessions" id="sessions">
+      <span class="sess-pill sess-inactive">ASIAN</span>
+      <span class="sess-pill sess-inactive">LONDON</span>
+      <span class="sess-pill sess-inactive">NEW YORK</span>
+    </div>
+    <div class="clock" id="clock">--:--:--</div>
+    <span class="engine-badge badge-stopped" id="engineBadge">STOPPED</span>
+  </div>
+</header>
+
+<!-- STATS BAR -->
+<div class="stats-bar">
+  <div class="stat">
+    <div class="stat-label">Pairs Active</div>
+    <div class="stat-val" id="statPairs" style="color:#a855f7">—</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Signals Today</div>
+    <div class="stat-val" id="statSignals" style="color:#10b981">0</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Active Signals</div>
+    <div class="stat-val" id="statActive" style="color:#f59e0b">0</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Last Scan</div>
+    <div class="stat-val" id="statLastScan" style="color:#94a3b8;font-size:13px">—</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Status</div>
+    <div class="stat-val" id="statStatus" style="color:#4b5563;font-size:13px">—</div>
+  </div>
+</div>
+
+<!-- CONTROLS -->
+<div class="controls">
+  <button class="btn btn-start"  id="btnStart"  onclick="engineStart()">▶ START</button>
+  <button class="btn btn-stop"   id="btnStop"   onclick="engineStop()">■ STOP</button>
+  <button class="btn btn-scan"   id="btnScan"   onclick="forceScan()">↻ FORCE SCAN</button>
+  <div class="controls-right">
+    <span class="ctrl-label">Cooldown</span>
+    <select class="ctrl-select" id="selCooldown" onchange="updateConfig()">
+      <option value="15">15 min</option>
+      <option value="30" selected>30 min</option>
+      <option value="60">60 min</option>
+    </select>
+    <span class="ctrl-label">Min Stars</span>
+    <select class="ctrl-select" id="selStars" onchange="updateConfig()">
+      <option value="2">2 ★</option>
+      <option value="3" selected>3 ★</option>
+      <option value="4">4 ★</option>
+      <option value="5">5 ★</option>
+    </select>
+    <span class="refresh-indicator" id="refreshCnt">Refreshing in 30s</span>
+  </div>
+</div>
+
+<!-- PAIR GRID -->
+<div class="grid-container">
+  <div class="grid" id="pairGrid">
+    <!-- cards injected by JS -->
+  </div>
+</div>
+
+<!-- LOG -->
+<div class="log-section">
+  <div class="log-title">📋 Activity Log</div>
+  <div class="log-box" id="logBox"></div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+let state = { running: false, statuses: {}, logs: [], scan_running: false };
+let countdown = 30;
+let countdownTimer;
+let signalsToday = 0;
+let lastScanTime = '—';
+
+// ── Clock ──────────────────────────────────────────────────────────────────
+function updateClock() {
+  const now = new Date();
+  const utc = now.toUTCString().slice(-12, -4);
+  document.getElementById('clock').textContent = 'UTC ' + utc;
+
+  // Sessions (UTC hours)
+  const h = now.getUTCHours();
+  const sess = document.getElementById('sessions');
+  const pills = sess.querySelectorAll('.sess-pill');
+  const isAsian  = h >= 23 || h < 8;
+  const isLondon = h >= 7  && h < 16;
+  const isNY     = h >= 12 && h < 21;
+  pills[0].className = 'sess-pill ' + (isAsian  ? 'sess-active' : 'sess-inactive');
+  pills[1].className = 'sess-pill ' + (isLondon ? 'sess-active' : 'sess-inactive');
+  pills[2].className = 'sess-pill ' + (isNY     ? 'sess-active' : 'sess-inactive');
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// ── Fetch Status ───────────────────────────────────────────────────────────
+async function fetchStatus() {
+  try {
+    const r = await fetch('/api/status');
+    const data = await r.json();
+    state = data;
+    renderAll(data);
+  } catch(e) {
+    showToast('Connection error — retrying...', '#ef4444');
+  }
+}
+
+// ── Countdown ─────────────────────────────────────────────────────────────
+function startCountdown() {
+  clearInterval(countdownTimer);
+  countdown = 30;
+  countdownTimer = setInterval(() => {
+    countdown--;
+    document.getElementById('refreshCnt').textContent = `Refreshing in ${countdown}s`;
+    if (countdown <= 0) {
+      fetchStatus();
+      countdown = 30;
+    }
+  }, 1000);
+}
+
+// ── Render ─────────────────────────────────────────────────────────────────
+function renderAll(data) {
+  // Engine badge
+  const badge = document.getElementById('engineBadge');
+  badge.textContent = data.running ? 'RUNNING' : 'STOPPED';
+  badge.className   = 'engine-badge ' + (data.running ? 'badge-running' : 'badge-stopped');
+
+  // Scan bar
+  document.getElementById('scanBar').className =
+    'scanning-bar' + (data.scan_running ? ' active' : '');
+
+  // Stats
+  const statuses = data.statuses || {};
+  const names    = Object.keys(statuses);
+  const enabled  = names.filter(n => statuses[n].is_enabled).length;
+  const active   = names.filter(n => statuses[n].signal).length;
+
+  document.getElementById('statPairs').textContent   = `${enabled}/${names.length}`;
+  document.getElementById('statActive').textContent  = active;
+  document.getElementById('statStatus').textContent  = data.scan_running ? 'SCANNING...' : (data.running ? 'WATCHING' : 'STOPPED');
+  document.getElementById('statStatus').style.color  = data.scan_running ? '#f97316' : (data.running ? '#10b981' : '#4b5563');
+
+  if (!data.scan_running) lastScanTime = new Date().toLocaleTimeString();
+  document.getElementById('statLastScan').textContent = lastScanTime;
+
+  // Cards
+  renderCards(statuses);
+
+  // Log
+  renderLog(data.logs || []);
+}
+
+function starStr(n) {
+  if (!n) return '';
+  return '★'.repeat(n) + '☆'.repeat(5 - n);
+}
+
+function renderCards(statuses) {
+  const grid  = document.getElementById('pairGrid');
+  const names = Object.keys(statuses);
+  if (names.length === 0) return;
+
+  names.forEach(name => {
+    const s   = statuses[name];
+    let card  = document.getElementById('card-' + name);
+    if (!card) {
+      card = document.createElement('div');
+      card.id = 'card-' + name;
+      card.className = 'pair-card';
+      grid.appendChild(card);
+    }
+
+    // Determine state
+    const hasLong  = s.signal === 'LONG';
+    const hasShort = s.signal === 'SHORT';
+    const pct      = s.consec > 0 ? Math.min(s.cpt / s.consec, 1) : 0;
+    const isConsol = pct > 0 && pct < 1 && !hasLong && !hasShort;
+
+    card.className = 'pair-card' +
+      (hasLong   ? ' signal-long'  : '') +
+      (hasShort  ? ' signal-short' : '') +
+      (isConsol  ? ' consolidating': '');
+
+    // Price
+    const pr   = s.price || 0;
+    const prStr = pr > 0 ? (pr < 100 ? pr.toFixed(5) : pr < 10000 ? pr.toFixed(2) : pr.toFixed(1)) : '—';
+
+    // Status text
+    let statusIcon = '●', statusClass = 'dot-watch', statusText = 'WATCHING';
+    if (hasLong)  { statusIcon = '▲'; statusClass = 'dot-long';  statusText = 'LONG SIGNAL';   }
+    if (hasShort) { statusIcon = '▼'; statusClass = 'dot-short'; statusText = 'SHORT SIGNAL';  }
+    if (isConsol) { statusIcon = '◆'; statusClass = 'dot-consol';statusText = 'CONSOLIDATING'; }
+
+    // Fill color
+    const fillClass = hasLong ? 'fill-long' : hasShort ? 'fill-short' : isConsol ? 'fill-consol' : 'fill-watch';
+
+    card.innerHTML = `
+      <div class="card-top">
+        <span class="pair-name">${name}</span>
+        <span class="pair-htf">${s.htf || '1h'}</span>
+      </div>
+      <div class="pair-price">${prStr}</div>
+      <div class="pair-status">
+        <span class="status-dot ${statusClass}"></span>
+        <span style="color:${hasLong ? 'var(--green)' : hasShort ? 'var(--red)' : isConsol ? 'var(--gold)' : 'var(--dim)'}">${statusText}</span>
+      </div>
+      ${s.stars ? `<div class="stars" style="color:var(--gold)">${starStr(s.stars)}</div>` : ''}
+      <div class="nr-bar-wrap">
+        <div class="nr-label">
+          <span style="color:var(--dim)">NR ${s.cpt || 0}/${s.consec || 4}</span>
+          <span style="color:var(--dim)">${Math.round(pct*100)}%</span>
+        </div>
+        <div class="nr-track">
+          <div class="nr-fill ${fillClass}" style="width:${Math.round(pct*100)}%"></div>
+        </div>
+      </div>
+      ${s.error ? `<div class="pair-error">⚠ ${s.error.slice(0,30)}</div>` : ''}
+      ${s.last_check_time ? `<div class="pair-time">Checked ${s.last_check_time}</div>` : ''}
+    `;
+  });
+}
+
+function renderLog(logs) {
+  const box = document.getElementById('logBox');
+  box.innerHTML = '';
+  logs.slice().reverse().forEach(entry => {
+    const line = document.createElement('div');
+    const tag  = (entry.tag || '').toLowerCase();
+    const cls  = tag === 'green'  ? 'log-green'  :
+                 tag === 'red'    ? 'log-red'    :
+                 tag === 'orange' ? 'log-orange' :
+                 tag === 'gold'   ? 'log-gold'   :
+                 tag === 'blue'   ? 'log-blue'   : 'log-dim';
+    line.className = cls;
+    line.textContent = entry.text || '';
+    box.appendChild(line);
+  });
+}
+
+// ── API Actions ────────────────────────────────────────────────────────────
+async function engineStart() {
+  await fetch('/api/start', {method:'POST'});
+  showToast('Engine started ▶', '#10b981');
+  setTimeout(fetchStatus, 500);
+}
+
+async function engineStop() {
+  await fetch('/api/stop', {method:'POST'});
+  showToast('Engine stopped ■', '#ef4444');
+  setTimeout(fetchStatus, 500);
+}
+
+async function forceScan() {
+  const btn = document.getElementById('btnScan');
+  btn.disabled = true;
+  await fetch('/api/force-scan', {method:'POST'});
+  showToast('Force scan triggered ↻', '#3b82f6');
+  setTimeout(() => { btn.disabled = false; fetchStatus(); }, 2000);
+}
+
+async function updateConfig() {
+  const cooldown = parseInt(document.getElementById('selCooldown').value);
+  const stars    = parseInt(document.getElementById('selStars').value);
+  await fetch('/api/config', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({cooldown_minutes: cooldown, min_stars: stars})
+  });
+}
+
+// ── Toast ──────────────────────────────────────────────────────────────────
+function showToast(msg, color) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.borderColor = color;
+  t.style.color = color;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
+fetchStatus();
+startCountdown();
+</script>
+</body>
+</html>

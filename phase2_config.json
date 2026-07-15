@@ -1,0 +1,19 @@
+{
+  "cooldown_minutes": 60,
+  "min_stars": 3,
+  "enabled_pairs": [
+    "EURUSD",
+    "GBPUSD",
+    "USDCAD",
+    "AUDUSD",
+    "USDJPY",
+    "USDCHF",
+    "BTCUSD",
+    "NZDUSD",
+    "EURGBP",
+    "XAUUSD",
+    "EURJPY",
+    "XAGUSD",
+    "GBPJPY"
+  ]
+}
