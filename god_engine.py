@@ -367,16 +367,15 @@ class GodWatcherEngine:
                 except Exception as e:
                     self._log(f"Scan failed, will retry next cycle: {e}", "red")
 
+
     def _scan_all(self):
         if self._scan_running:
             self._log("Scan already in progress — please wait", "orange")
             return
         self._scan_running = True
+        scan_start = time.time()
         enabled = [n for n, s in self.statuses.items() if s.is_enabled]
         self._log(f"Scanning {len(enabled)}/{len(PAIR_CONFIGS)} pairs...", "dim")
-        # max_workers=2: parallel downloads, fewer background threads
-        # as_completed timeout=120: full scan budget (25s/pair × 7 batches of 2)
-        # shutdown(wait=False): never hang waiting for stuck threads
         pool = ThreadPoolExecutor(max_workers=2)
         try:
             futures = {pool.submit(self._check_pair, n, PAIR_CONFIGS[n]): n
@@ -388,35 +387,43 @@ class GodWatcherEngine:
                         fut.result()
                     except Exception as e:
                         self._log(f"{name} error: {e}", "red")
+                    # Hard wall-clock guard: abort if total scan > 3 minutes
+                    if time.time() - scan_start > 180:
+                        self._log("3-min wall-clock limit hit — aborting scan", "orange")
+                        break
             except TimeoutError:
                 self._log("Scan timed out — some pairs skipped", "orange")
         finally:
             pool.shutdown(wait=False, cancel_futures=True)
             self._scan_running = False
         self._notify_ui()
-        self._log(f"Scan complete. Next scan in {self.check_interval // 60}m", "dim")
+        total = time.time() - scan_start
+        self._log(f"Scan complete in {total:.1f}s. Next scan in {self.check_interval // 60}m", "dim")
+
 
     def _check_pair(self, name: str, config: PairConfig):
-        time.sleep(0)          # yield GIL → keeps Tkinter UI thread responsive
         status = self.statuses[name]
+        t0 = time.time()
 
         # Update cooldown countdown
         with self._lock:
             if status.last_alert_dt:
-                elapsed = (datetime.now() - status.last_alert_dt).total_seconds()
-                remaining = max(0, self.cooldown_minutes * 60 - int(elapsed))
+                elapsed_cd = (datetime.now() - status.last_alert_dt).total_seconds()
+                remaining = max(0, self.cooldown_minutes * 60 - int(elapsed_cd))
                 status.cooldown_remaining = remaining
             else:
                 status.cooldown_remaining = 0
 
         try:
             df = fetch_htf_data(config)
+            t1 = time.time()
+            self._log(f"{name}: fetch {'OK' if df is not None else 'FAILED'} ({t1-t0:.1f}s)", "dim")
             if df is None:
                 with self._lock:
-                    status.error = "No data"
+                    status.error = "No data from Yahoo Finance"
                 return
 
-            df = calculate_signals(df, config)
+            df = compute_signals(df, config)
             if len(df) < 2:
                 return
 
